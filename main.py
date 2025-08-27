@@ -2,14 +2,17 @@ import discord
 from discord.ext import commands
 import yt_dlp
 import asyncio
+import os
 
+# Set up Discord intents
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='', intents=intents)
 
+# yt-dlp configuration for SoundCloud
 ytdl_format_options = {
     'format': 'bestaudio/best',
-    'noplaylist': True,  # Set to False if you want to support SoundCloud playlists
+    'noplaylist': True,  # Set to False to support SoundCloud playlists
     'quiet': True,
 }
 ytdl = yt_dlp.YoutubeDL(ytdl_format_options)
@@ -24,11 +27,15 @@ class SoundCloudSource(discord.PCMVolumeTransformer):
     @classmethod
     async def from_url(cls, url, *, loop=None):
         loop = loop or asyncio.get_event_loop()
-        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=False))
-        if 'entries' in data:
-            data = data['entries'][0]
-        filename = data['url']
-        return cls(discord.FFmpegPCMAudio(filename, options='-vn'), data=data)
+        try:
+            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=False))
+            if 'entries' in data:
+                data = data['entries'][0]
+            filename = data['url']
+            return cls(discord.FFmpegPCMAudio(filename, options='-vn'), data=data)
+        except Exception as e:
+            print(f"Error extracting audio: {e}")
+            raise
 
 @bot.event
 async def on_ready():
@@ -54,21 +61,25 @@ async def on_message(message):
         voice_channel = message.author.voice.channel
         voice_client = message.guild.voice_client
 
-        if voice_client and voice_client.is_playing():
-            voice_client.stop()
+        try:
+            if voice_client and voice_client.is_playing():
+                voice_client.stop()
 
-        if not voice_client:
-            voice_client = await voice_channel.connect()
+            if not voice_client:
+                voice_client = await voice_channel.connect()
 
-        async with message.channel.typing():
-            # Use scsearch: for SoundCloud search, or use the URL directly if provided
-            if song_query.startswith('https://soundcloud.com/'):
-                search_url = song_query
-            else:
-                search_url = f"scsearch:{song_query}"
-            player = await SoundCloudSource.from_url(search_url, loop=bot.loop)
-            voice_client.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
-            await message.channel.send(f'Now playing: {player.title}')
+            async with message.channel.typing():
+                # Use scsearch: for SoundCloud search, or use the URL directly if provided
+                if song_query.startswith('https://soundcloud.com/'):
+                    search_url = song_query
+                else:
+                    search_url = f"scsearch:{song_query}"
+                player = await SoundCloudSource.from_url(search_url, loop=bot.loop)
+                voice_client.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
+                await message.channel.send(f'Now playing: {player.title}')
+        except Exception as e:
+            await message.channel.send(f"Error playing track: {str(e)}")
+            print(f"Error in play command: {e}")
 
     elif content == 'pause':
         voice_client = message.guild.voice_client
@@ -96,4 +107,8 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-bot.run('YOUR_BOT_TOKEN')
+# Load bot token from Railway's BOT_TOKEN variable
+bot_token = os.getenv('BOT_TOKEN')
+if not bot_token:
+    raise ValueError("BOT_TOKEN environment variable not set in Railway")
+bot.run(bot_token)
